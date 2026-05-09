@@ -3640,6 +3640,8 @@ export async function handleChatCore({
     const usage = extractUsageFromResponse(responseBody, provider);
     if (usage && typeof usage === "object") {
       attachCompressionUsageReceiptAfterAnalytics(usage as Record<string, unknown>, "provider");
+      const msg = `[${new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" })}] 📊 [USAGE] ${provider.toUpperCase()} | ${formatUsageLog(usage)}${connectionId ? ` | account=${connectionId.slice(0, 8)}...` : ""}`;
+      console.log(`${COLORS.green}${msg}${COLORS.reset}`);
     }
     appendRequestLog({ model, provider, connectionId, tokens: usage, status: "200 OK" }).catch(
       () => {}
@@ -3647,46 +3649,6 @@ export async function handleChatCore({
 
     // Save structured call log with full payloads
     const cacheUsageLogMeta = buildCacheUsageLogMeta(usage);
-    if (usage && typeof usage === "object") {
-      const msg = `[${new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" })}] 📊 [USAGE] ${provider.toUpperCase()} | ${formatUsageLog(usage)}${connectionId ? ` | account=${connectionId.slice(0, 8)}...` : ""}`;
-      console.log(`${COLORS.green}${msg}${COLORS.reset}`);
-
-      const inputTokens = usage.prompt_tokens || 0;
-      const cachedTokens = toPositiveNumber(
-        usage.cache_read_input_tokens ??
-          usage.cached_tokens ??
-          (
-            (usage as Record<string, unknown>).prompt_tokens_details as
-              | Record<string, unknown>
-              | undefined
-          )?.cached_tokens
-      );
-      const cacheCreationTokens = toPositiveNumber(
-        usage.cache_creation_input_tokens ??
-          (
-            (usage as Record<string, unknown>).prompt_tokens_details as
-              | Record<string, unknown>
-              | undefined
-          )?.cache_creation_tokens
-      );
-
-      saveRequestUsage({
-        provider: provider || "unknown",
-        model: model || "unknown",
-        tokens: usage,
-        status: "200",
-        success: true,
-        latencyMs: Date.now() - startTime,
-        timeToFirstTokenMs: Date.now() - startTime,
-        errorCode: null,
-        timestamp: new Date().toISOString(),
-        connectionId: connectionId || undefined,
-        apiKeyId: apiKeyInfo?.id || undefined,
-        apiKeyName: apiKeyInfo?.name || undefined,
-      }).catch((err) => {
-        console.error("Failed to save usage stats:", err.message);
-      });
-    }
 
     // Translate response to client's expected format (usually OpenAI)
     // Pass toolNameMap so Claude OAuth proxy_ prefix is stripped in tool_use blocks (#605)
@@ -3742,9 +3704,13 @@ export async function handleChatCore({
     }
 
     // Add buffer and filter usage for client (to prevent CLI context errors)
+    let finalUsageForHistory = usage;
     if (translatedResponse?.usage) {
       const buffered = addBufferToUsage(translatedResponse.usage);
       translatedResponse.usage = filterUsageForFormat(buffered, clientResponseFormat);
+      if (!finalUsageForHistory) {
+        finalUsageForHistory = translatedResponse.usage;
+      }
     } else {
       // Fallback: estimate usage when provider returned no usage block
       const contentLength = JSON.stringify(
@@ -3753,8 +3719,29 @@ export async function handleChatCore({
       if (contentLength > 0) {
         const estimated = estimateUsage(body, contentLength, clientResponseFormat);
         translatedResponse.usage = filterUsageForFormat(estimated, clientResponseFormat);
+        if (!finalUsageForHistory) {
+          finalUsageForHistory = estimated;
+        }
       }
     }
+
+    // Always log usage to usage_history for successful requests with API keys
+    saveRequestUsage({
+      provider: provider || "unknown",
+      model: model || "unknown",
+      tokens: finalUsageForHistory || { prompt_tokens: 0, completion_tokens: 0 },
+      status: "200",
+      success: true,
+      latencyMs: Date.now() - startTime,
+      timeToFirstTokenMs: Date.now() - startTime,
+      errorCode: null,
+      timestamp: new Date().toISOString(),
+      connectionId: connectionId || undefined,
+      apiKeyId: apiKeyInfo?.id || undefined,
+      apiKeyName: apiKeyInfo?.name || undefined,
+    }).catch((err) => {
+      console.error("Failed to save usage stats:", err.message);
+    });
 
     if (memoryOwnerId && memorySettings?.enabled && memorySettings.maxTokens > 0) {
       const requestMemoryText = extractMemoryTextFromRequestBody(body as Record<string, unknown>);
@@ -4013,42 +4000,25 @@ export async function handleChatCore({
     // Track cache token metrics for streaming responses
     if (streamUsage && typeof streamUsage === "object") {
       attachCompressionUsageReceiptAfterAnalytics(streamUsage as Record<string, unknown>, "stream");
-      const inputTokens = streamUsage.prompt_tokens || 0;
-      const cachedTokens = toPositiveNumber(
-        streamUsage.cache_read_input_tokens ??
-          streamUsage.cached_tokens ??
-          (
-            (streamUsage as Record<string, unknown>).prompt_tokens_details as
-              | Record<string, unknown>
-              | undefined
-          )?.cached_tokens
-      );
-      const cacheCreationTokens = toPositiveNumber(
-        streamUsage.cache_creation_input_tokens ??
-          (
-            (streamUsage as Record<string, unknown>).prompt_tokens_details as
-              | Record<string, unknown>
-              | undefined
-          )?.cache_creation_tokens
-      );
-
-      saveRequestUsage({
-        provider: provider || "unknown",
-        model: model || "unknown",
-        tokens: streamUsage,
-        status: String(streamStatus || 200),
-        success: streamStatus === 200,
-        latencyMs: Date.now() - startTime,
-        timeToFirstTokenMs: ttft,
-        errorCode: null,
-        timestamp: new Date().toISOString(),
-        connectionId: connectionId || undefined,
-        apiKeyId: apiKeyInfo?.id || undefined,
-        apiKeyName: apiKeyInfo?.name || undefined,
-      }).catch((err) => {
-        console.error("Failed to save usage stats:", err.message);
-      });
     }
+
+    // Always log usage to usage_history for successful requests with API keys
+    saveRequestUsage({
+      provider: provider || "unknown",
+      model: model || "unknown",
+      tokens: streamUsage || { prompt_tokens: 0, completion_tokens: 0 },
+      status: String(streamStatus || 200),
+      success: streamStatus === 200,
+      latencyMs: Date.now() - startTime,
+      timeToFirstTokenMs: ttft,
+      errorCode: null,
+      timestamp: new Date().toISOString(),
+      connectionId: connectionId || undefined,
+      apiKeyId: apiKeyInfo?.id || undefined,
+      apiKeyName: apiKeyInfo?.name || undefined,
+    }).catch((err) => {
+      console.error("Failed to save usage stats:", err.message);
+    });
 
     persistAttemptLogs({
       status: streamStatus || 200,

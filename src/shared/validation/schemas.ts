@@ -1458,8 +1458,11 @@ export const updateKeyPermissionsSchema = z
     noLog: z.boolean().optional(),
     autoResolve: z.boolean().optional(),
     isActive: z.boolean().optional(),
+    isBanned: z.boolean().optional(),
+    expiresAt: z.string().datetime().nullable().optional(),
     maxSessions: z.number().int().min(0).max(10000).optional(),
     accessSchedule: z.union([accessScheduleSchema, z.null()]).optional(),
+    rateLimits: z.union([z.array(z.object({ limit: z.number().int().positive(), window: z.number().int().positive() })).max(50), z.null()]).optional(),
   })
   .superRefine((value, ctx) => {
     if (
@@ -1469,8 +1472,11 @@ export const updateKeyPermissionsSchema = z
       value.noLog === undefined &&
       value.autoResolve === undefined &&
       value.isActive === undefined &&
+      value.isBanned === undefined &&
+      value.expiresAt === undefined &&
       value.maxSessions === undefined &&
-      value.accessSchedule === undefined
+      value.accessSchedule === undefined &&
+      value.rateLimits === undefined
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
