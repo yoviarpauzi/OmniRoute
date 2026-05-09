@@ -2,6 +2,7 @@
  * db/apiKeys.js — API key management.
  */
 
+import { createHash } from "crypto";
 import { v4 as uuidv4 } from "uuid";
 import { getDbInstance, rowToCamel } from "./core";
 import { backupDbFile } from "./backup";
@@ -454,7 +455,6 @@ function parseIsBanned(value: unknown): boolean {
 
 async function hashKey(key: string): Promise<string> {
   if (!key || typeof key !== "string") return "";
-  const { createHash } = await import("crypto");
   return createHash("sha256").update(key).digest("hex");
 }
 
