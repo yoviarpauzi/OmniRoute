@@ -818,6 +818,31 @@ export async function validateApiKey(key: string | null | undefined) {
     return cached.valid;
   }
 
+  // Try Redis cache for multi-instance consistency
+  try {
+    const { getRedisClient } = await import("@/shared/utils/rateLimiter");
+    const redis = getRedisClient();
+    const redisKey = `auth:api_key:${hashedKey}`;
+    const redisData = await redis.get(redisKey);
+    if (redisData) {
+      const data = JSON.parse(redisData);
+      const isBanned = !!data.isBanned;
+      const isActive = !!data.isActive;
+      const revokedAt = data.revokedAt;
+      const expiresAt = data.expiresAt;
+
+      if (isBanned || !isActive) return false;
+      if (typeof revokedAt === "string" && revokedAt.trim() !== "") return false;
+      if (typeof expiresAt === "string" && expiresAt.trim() !== "") {
+        const expiresMs = Date.parse(expiresAt);
+        if (Number.isFinite(expiresMs) && expiresMs <= now) return false;
+      }
+      return true;
+    }
+  } catch (err) {
+    // Fail silent for Redis lookup
+  }
+
   const db = getDbInstance() as ApiKeysDbLike;
   const stmt = getPreparedStatements(db);
   const row = stmt.validateKey.get(key, hashedKey) as JsonRecord | undefined;
