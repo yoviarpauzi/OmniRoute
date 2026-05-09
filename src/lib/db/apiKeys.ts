@@ -453,6 +453,7 @@ function parseIsBanned(value: unknown): boolean {
 }
 
 async function hashKey(key: string): Promise<string> {
+  if (!key || typeof key !== "string") return "";
   const { createHash } = await import("crypto");
   return createHash("sha256").update(key).digest("hex");
 }
