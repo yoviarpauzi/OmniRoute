@@ -269,8 +269,7 @@ function getPreparedStatements(db: ApiKeysDbLike): ApiKeysStatements {
       "SELECT id, name, machine_id, allowed_models, allowed_connections, no_log, auto_resolve, is_active, access_schedule, max_requests_per_day, max_requests_per_minute, max_sessions, revoked_at, expires_at, ip_allowlist, scopes, rate_limits, is_banned, key_hash FROM api_keys WHERE key = ? OR key_hash = ?"
     );
     _stmtInsertKey = db.prepare(
-      "INSERT INTO api_keys (id, name, key, machine_id, allowed_models, no_log, created_at, key_prefix, key_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-      "INSERT INTO api_keys (id, name, key, machine_id, allowed_models, no_log, created_at, key_prefix, scopes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      "INSERT INTO api_keys (id, name, key, machine_id, allowed_models, no_log, created_at, key_prefix, key_hash, scopes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     );
     _stmtDeleteKey = db.prepare("DELETE FROM api_keys WHERE id = ?");
   }
@@ -404,11 +403,13 @@ function parseRateLimits(value: unknown): RateLimitRule[] | null {
     const parsed = JSON.parse(value);
     if (!Array.isArray(parsed)) return null;
     return parsed.filter(
-      (rule: any) =>
+      (rule: unknown) =>
         typeof rule === "object" &&
         rule !== null &&
-        typeof rule.limit === "number" &&
-        typeof rule.window === "number"
+        "limit" in rule &&
+        typeof (rule as Record<string, unknown>).limit === "number" &&
+        "window" in rule &&
+        typeof (rule as Record<string, unknown>).window === "number"
     ) as RateLimitRule[];
   } catch {
     return null;
@@ -459,7 +460,6 @@ async function hashKey(key: string): Promise<string> {
   return createHash("sha256").update(key).digest("hex");
 }
 
-export async function createApiKey(name: string, machineId: string) {
 export async function createApiKey(name: string, machineId: string, scopes: string[] = []) {
   if (!machineId) {
     throw new Error("machineId is required");
@@ -493,7 +493,7 @@ export async function createApiKey(name: string, machineId: string, scopes: stri
     0,
     apiKey.createdAt,
     apiKey.key.slice(0, 12),
-    await hashKey(apiKey.key)
+    await hashKey(apiKey.key),
     JSON.stringify(scopes)
   );
   setNoLog(apiKey.id, false);
@@ -584,8 +584,6 @@ export async function updateApiKeyPermissions(
           rateLimits: update.rateLimits,
           isBanned: update.isBanned,
           expiresAt: update.expiresAt,
-          maxSessions: (update as { maxSessions?: number | null; expiresAt?: string | null })
-            .maxSessions,
           maxSessions: (update as { maxSessions?: number | null }).maxSessions,
           scopes: (update as { scopes?: string[] | null }).scopes,
         };
@@ -603,7 +601,6 @@ export async function updateApiKeyPermissions(
     normalized.rateLimits === undefined &&
     normalized.isBanned === undefined &&
     normalized.expiresAt === undefined &&
-    (normalized as Record<string, unknown>).maxSessions === undefined
     (normalized as Record<string, unknown>).maxSessions === undefined &&
     (normalized as Record<string, unknown>).scopes === undefined
   ) {
@@ -734,7 +731,9 @@ export async function updateApiKeyPermissions(
 
   // Also invalidate Redis if key_hash is available
   try {
-    const row = db.prepare("SELECT key_hash FROM api_keys WHERE id = ?").get(id) as { key_hash: string | null } | undefined;
+    const row = db.prepare("SELECT key_hash FROM api_keys WHERE id = ?").get(id) as
+      | { key_hash: string | null }
+      | undefined;
     if (row?.key_hash) {
       const { getRedisClient } = await import("@/shared/utils/rateLimiter");
       const redis = getRedisClient();
@@ -938,10 +937,9 @@ export async function getApiKeyMetadata(
       revokedAt: null,
       expiresAt: null,
       ipAllowlist: [],
-      scopes: [],
+      scopes: ["manage"],
       isBanned: false,
       keyHash: null,
-      scopes: ["manage"],
     };
   }
 
